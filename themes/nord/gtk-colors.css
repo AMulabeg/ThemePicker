@@ -1,0 +1,62 @@
+/* theme-picker: nord — GTK named-color overrides.
+ * Loaded after the active theme's own gtk.css (or after Adwaita/Adwaita-dark
+ * for apps with no third-party theme), so these win the cascade for any
+ * widget/app that reads these variable names. Only colors this palette
+ * actually has semantics for are set; anything else (warning/success hues,
+ * icons, borders-radius, etc.) is left to the underlying theme. */
+
+/* classic GTK3 theme vars (used by e.g. Material-Black-Plum, most GTK3 themes) */
+@define-color theme_bg_color #2E3440;
+@define-color theme_base_color #3B4252;
+@define-color theme_fg_color #D8DEE9;
+@define-color theme_text_color #D8DEE9;
+@define-color theme_selected_bg_color #88C0D0;
+@define-color insensitive_bg_color #3B4252;
+@define-color insensitive_base_color #3B4252;
+@define-color insensitive_fg_color #81A1C1;
+@define-color theme_unfocused_bg_color #2E3440;
+@define-color theme_unfocused_base_color #3B4252;
+@define-color theme_unfocused_fg_color #81A1C1;
+@define-color theme_unfocused_text_color #81A1C1;
+@define-color theme_unfocused_selected_bg_color #88C0D0;
+@define-color unfocused_insensitive_color #81A1C1;
+@define-color borders #4C566A;
+@define-color unfocused_borders #4C566A;
+@define-color error_color #BF616A;
+@define-color wm_title #D8DEE9;
+@define-color wm_unfocused_title #81A1C1;
+@define-color wm_bg #2E3440;
+@define-color wm_unfocused_bg #2E3440;
+@define-color content_view_bg #3B4252;
+@define-color text_view_bg #3B4252;
+@define-color placeholder_text_color #81A1C1;
+
+/* libadwaita (GTK4) named vars — accent_fg/destructive_fg/error_fg assume
+ * dark-on-accent contrast, which fits this theme set's pastel accents;
+ * revisit if a lighter theme is added. */
+@define-color window_bg_color #2E3440;
+@define-color window_fg_color #D8DEE9;
+@define-color view_bg_color #3B4252;
+@define-color view_fg_color #D8DEE9;
+@define-color headerbar_bg_color #2E3440;
+@define-color headerbar_fg_color #D8DEE9;
+@define-color headerbar_border_color #4C566A;
+@define-color headerbar_backdrop_color #2E3440;
+@define-color headerbar_shade_color #4C566A;
+@define-color card_bg_color #3B4252;
+@define-color card_fg_color #D8DEE9;
+@define-color card_shade_color #4C566A;
+@define-color dialog_bg_color #2E3440;
+@define-color dialog_fg_color #D8DEE9;
+@define-color popover_bg_color #3B4252;
+@define-color popover_fg_color #D8DEE9;
+@define-color shade_color #4C566A;
+@define-color scrollbar_outline_color #4C566A;
+@define-color accent_color #88C0D0;
+@define-color accent_bg_color #88C0D0;
+@define-color accent_fg_color #2E3440;
+@define-color destructive_color #BF616A;
+@define-color destructive_bg_color #BF616A;
+@define-color destructive_fg_color #2E3440;
+@define-color error_bg_color #BF616A;
+@define-color error_fg_color #2E3440;

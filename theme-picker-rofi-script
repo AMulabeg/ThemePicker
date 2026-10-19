@@ -1,0 +1,8 @@
+#!/usr/bin/env bash
+# rofi script-mode entry point for `theme-picker rofi`'s menu.
+# Kept as its own file (rather than passing args in the -modi spec) because
+# rofi's "name:executable" modi syntax expects a bare path, no arguments.
+set -euo pipefail
+
+SCRIPT_DIR="$(cd -- "$(dirname -- "$(readlink -f -- "${BASH_SOURCE[0]}")")" &>/dev/null && pwd)"
+exec "$SCRIPT_DIR/theme-picker" --rofi-script "$@"

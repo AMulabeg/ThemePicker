@@ -1,0 +1,324 @@
+#!/usr/bin/env bash
+# theme-picker — pick one theme, sync it to nvim, kitty, ghostty, waybar, rofi, and tmux.
+set -euo pipefail
+
+SCRIPT_SOURCE="$(readlink -f -- "${BASH_SOURCE[0]}")"
+SCRIPT_DIR="$(cd -- "$(dirname -- "$SCRIPT_SOURCE")" &>/dev/null && pwd)"
+THEMES_DIR="$SCRIPT_DIR/themes"
+
+STATE_DIR="$HOME/.config/theme-picker"
+STATE_FILE="$STATE_DIR/current"
+
+KITTY_DIR="$HOME/.config/kitty"
+GHOSTTY_DIR="$HOME/.config/ghostty"
+WAYBAR_DIR="$HOME/.config/waybar"
+ROFI_DIR="$HOME/.config/rofi"
+ROFI_COLORS_DIR="$ROFI_DIR/colors"
+TMUX_DIR="$HOME/.config/tmux"
+GTK3_DIR="$HOME/.config/gtk-3.0"
+GTK4_DIR="$HOME/.config/gtk-4.0"
+GTK4_BASE_STATE="$STATE_DIR/gtk4-base-css"
+
+usage() {
+  cat <<'EOF'
+Usage:
+  theme-picker <theme>     Apply a theme (nvim, kitty, ghostty, waybar, rofi, tmux, gtk)
+  theme-picker list        List available themes (* marks the current one)
+  theme-picker current     Print the current theme's name
+  theme-picker rofi        Pick a theme from a rofi menu and apply it
+EOF
+}
+
+list_themes() {
+  local current=""
+  if [[ -f "$STATE_FILE" ]]; then
+    current="$(<"$STATE_FILE")"
+  fi
+  for dir in "$THEMES_DIR"/*/; do
+    local name
+    name="$(basename "$dir")"
+    if [[ "$name" == "$current" ]]; then
+      echo "* $name"
+    else
+      echo "  $name"
+    fi
+  done
+}
+
+apply_kitty() {
+  local slug="$1"
+  mkdir -p "$KITTY_DIR"
+  cp "$THEMES_DIR/$slug/kitty.conf" "$KITTY_DIR/theme.conf"
+
+  local conf="$KITTY_DIR/kitty.conf"
+  if [[ -f "$conf" ]] && ! grep -q '^include \./theme\.conf$' "$conf"; then
+    if grep -qE '^include \./.*\.conf$' "$conf"; then
+      sed -i -E 's|^include \./.*\.conf$|include ./theme.conf|' "$conf"
+    else
+      printf '\ninclude ./theme.conf\n' >>"$conf"
+    fi
+  fi
+
+  # kitty reloads kitty.conf (and its includes) on SIGUSR1, no restart needed.
+  if pgrep -x kitty >/dev/null 2>&1; then
+    pkill -SIGUSR1 kitty || true
+  fi
+}
+
+apply_ghostty() {
+  local slug="$1"
+  mkdir -p "$GHOSTTY_DIR/themes"
+  cp "$THEMES_DIR/$slug/ghostty.conf" "$GHOSTTY_DIR/themes/$slug"
+
+  local conf="$GHOSTTY_DIR/config"
+  if [[ -f "$conf" ]]; then
+    if grep -qE '^theme = ' "$conf"; then
+      sed -i -E "s|^theme = .*|theme = $slug|" "$conf"
+    else
+      printf 'theme = %s\n' "$slug" >>"$conf"
+    fi
+  fi
+  # Ghostty does NOT watch its config file; open windows need a manual
+  # reload (default keybind: ctrl+shift+,). New windows pick it up either way.
+}
+
+apply_waybar() {
+  local slug="$1"
+  mkdir -p "$WAYBAR_DIR"
+  cp "$THEMES_DIR/$slug/waybar-colors.css" "$WAYBAR_DIR/colors.css"
+
+  local css="$WAYBAR_DIR/style.css"
+  if [[ -f "$css" ]] && ! grep -q '^@import "colors.css";$' "$css"; then
+    sed -i '1i @import "colors.css";' "$css"
+  fi
+
+  # Restart waybar to pick up the new colors.css.
+  if pgrep -x waybar >/dev/null 2>&1; then
+    pkill -x waybar || true
+    for _ in $(seq 1 20); do
+      pgrep -x waybar >/dev/null 2>&1 || break
+      sleep 0.1
+    done
+  fi
+  setsid waybar >/dev/null 2>&1 &
+  disown
+}
+
+apply_rofi() {
+  local slug="$1"
+  [[ -d "$ROFI_DIR" ]] || return 0
+  [[ -f "$THEMES_DIR/$slug/rofi-colors.rasi" ]] || return 0
+
+  mkdir -p "$ROFI_COLORS_DIR"
+  cp "$THEMES_DIR/$slug/rofi-colors.rasi" "$ROFI_COLORS_DIR/current.rasi"
+
+  # Every launcher/applet/powermenu style ships its own shared/colors.rasi,
+  # each @import-ing one hardcoded palette from this colors/ dir. Repoint
+  # all of them at our generated file instead.
+  local f
+  while IFS= read -r -d '' f; do
+    sed -i -E 's|^@import "~/\.config/rofi/colors/[a-zA-Z0-9_-]+\.rasi"$|@import "~/.config/rofi/colors/current.rasi"|' "$f"
+  done < <(find -L "$ROFI_DIR" -type f -path '*/shared/colors.rasi' -print0 2>/dev/null)
+  # rofi has no long-running daemon in this setup — each launch reads the
+  # theme files fresh, so no reload/restart is needed.
+}
+
+apply_tmux() {
+  local slug="$1"
+  [[ -f "$THEMES_DIR/$slug/tmux.conf" ]] || return 0
+
+  mkdir -p "$TMUX_DIR"
+  cp "$THEMES_DIR/$slug/tmux.conf" "$TMUX_DIR/theme.conf"
+
+  local conf="$TMUX_DIR/tmux.conf"
+  if [[ -f "$conf" ]]; then
+    # One-time migration: the status-line script used to live under
+    # themes/<slug>/, hardcoded to whichever theme was active when it was
+    # installed. Move callers onto the stable, theme-independent path and
+    # make sure theme.conf's @minimal-tmux-* options are sourced first.
+    if grep -qE '^run "?~/\.config/tmux/themes/[^/]+/minimal\.tmux"?$' "$conf"; then
+      sed -i -E 's|^run "?~/\.config/tmux/themes/[^/]+/minimal\.tmux"?$|source-file -q ~/.config/tmux/theme.conf\nrun ~/.config/tmux/minimal.tmux|' "$conf"
+    elif ! grep -q '^source-file -q ~/.config/tmux/theme.conf$' "$conf"; then
+      printf '\nsource-file -q ~/.config/tmux/theme.conf\nrun ~/.config/tmux/minimal.tmux\n' >>"$conf"
+    fi
+  fi
+
+  # tmux has no config-file watcher; re-source tmux.conf on the running
+  # server (if any) so already-open sessions pick up the new colors, same
+  # as kitty's SIGUSR1 reload.
+  if command -v tmux >/dev/null 2>&1 && tmux info >/dev/null 2>&1; then
+    tmux source-file "$conf" >/dev/null 2>&1 || true
+  fi
+}
+
+# Layers this theme's colors.css on top of whatever's already loaded at
+# `dir`/gtk.css (a real theme's stylesheet, hand-written overrides, or
+# nothing) so our @define-color overrides win the cascade without
+# clobbering the rest of the theme. `resolve_symlink` is 1 for gtk-4.0,
+# where installers commonly point gtk.css itself at a theme's stylesheet
+# (GTK4 has no gtk-theme-name lookup of its own) — the first time we see
+# that, the real target is captured to $GTK4_BASE_STATE so it can still be
+# imported after we take over the file.
+apply_gtk_dir() {
+  local slug="$1" dir="$2" resolve_symlink="$3"
+  mkdir -p "$dir"
+  cp "$THEMES_DIR/$slug/gtk-colors.css" "$dir/colors.css"
+
+  if [[ "$resolve_symlink" == 1 && -L "$dir/gtk.css" ]]; then
+    mkdir -p "$STATE_DIR"
+    readlink -f "$dir/gtk.css" >"$GTK4_BASE_STATE"
+    rm -f "$dir/gtk.css"
+  fi
+
+  if [[ ! -f "$dir/gtk.css" ]]; then
+    local base=""
+    if [[ "$resolve_symlink" == 1 && -f "$GTK4_BASE_STATE" ]]; then
+      base="$(<"$GTK4_BASE_STATE")"
+    fi
+    {
+      [[ -n "$base" ]] && printf '@import url("%s");\n' "$base"
+      printf '@import url("colors.css");\n'
+    } >"$dir/gtk.css"
+  elif ! grep -qF '@import url("colors.css");' "$dir/gtk.css"; then
+    # Existing file we don't own (a real theme's CSS, or hand-written
+    # overrides) — append our import so ours loads last and wins the
+    # cascade, without touching what's already there.
+    printf '\n@import url("colors.css");\n' >>"$dir/gtk.css"
+  fi
+}
+
+apply_gtk() {
+  local slug="$1"
+  [[ -f "$THEMES_DIR/$slug/gtk-colors.css" ]] || return 0
+  apply_gtk_dir "$slug" "$GTK3_DIR" 0
+  apply_gtk_dir "$slug" "$GTK4_DIR" 1
+  # GTK watches its own gtk.css and reapplies changes live for most
+  # GTK4/libadwaita apps; GTK3 apps generally need a restart to re-read it.
+}
+
+apply_state() {
+  local slug="$1"
+  mkdir -p "$STATE_DIR"
+  printf '%s\n' "$slug" >"$STATE_FILE"
+}
+
+apply_theme() {
+  local slug="$1"
+  if [[ ! -d "$THEMES_DIR/$slug" ]]; then
+    echo "error: unknown theme '$slug'" >&2
+    echo "available themes:" >&2
+    list_themes >&2
+    exit 1
+  fi
+
+  apply_kitty "$slug"
+  apply_ghostty "$slug"
+  apply_waybar "$slug"
+  apply_rofi "$slug"
+  apply_tmux "$slug"
+  apply_gtk "$slug"
+  apply_state "$slug"
+
+  echo "theme set to: $slug"
+}
+
+# Emits one page of the rofi script-mode listing (see rofi-script(5)).
+print_script_entries() {
+  local current=""
+  if [[ -f "$STATE_FILE" ]]; then
+    current="$(<"$STATE_FILE")"
+  fi
+
+  printf '\0prompt\x1fTheme\n'
+
+  local name
+  for dir in "$THEMES_DIR"/*/; do
+    name="$(basename "$dir")"
+    if [[ "$name" == "$current" ]]; then
+      printf '%s (current)\n' "$name"
+    else
+      printf '%s\n' "$name"
+    fi
+  done
+}
+
+# rofi script-mode entry point (see rofi-script(5)). Invoked repeatedly by
+# rofi itself via theme-picker-rofi-script, never by the user directly.
+# ROFI_RETV: 0 = initial call, 1 = entry selected (Enter). $1 is the
+# currently highlighted entry's text once rofi has a selection.
+rofi_script_mode() {
+  local sel="${1:-}"
+  sel="${sel% (current)}"
+
+  case "${ROFI_RETV:-0}" in
+  0)
+    print_script_entries
+    ;;
+  1)
+    # Confirm: apply for real and let rofi close (no entries printed).
+    if [[ -d "$THEMES_DIR/$sel" ]]; then
+      apply_theme "$sel" >/dev/null
+    fi
+    ;;
+  *)
+    print_script_entries
+    ;;
+  esac
+}
+
+rofi_menu() {
+  command -v rofi >/dev/null 2>&1 || {
+    echo "error: rofi not found in PATH" >&2
+    exit 1
+  }
+
+  # Reuse whichever applet style is currently active, so the picker matches
+  # the rest of the user's rofi menus.
+  local theme_flag=()
+  if [[ -f "$ROFI_DIR/applets/shared/theme.bash" ]]; then
+    local type style
+    # shellcheck disable=SC1091
+    source "$ROFI_DIR/applets/shared/theme.bash"
+    if [[ -n "${type:-}" && -n "${style:-}" && -f "$type/$style" ]]; then
+      theme_flag=(-theme "$type/$style")
+    fi
+  fi
+
+  rofi -modes "theme-picker:$SCRIPT_DIR/theme-picker-rofi-script" \
+    -show theme-picker \
+    "${theme_flag[@]}"
+}
+
+main() {
+  case "${1:-}" in
+  "" | -h | --help)
+    usage
+    exit 0
+    ;;
+  list | --list)
+    list_themes
+    exit 0
+    ;;
+  current | --current)
+    if [[ -f "$STATE_FILE" ]]; then
+      cat "$STATE_FILE"
+    else
+      echo "(none set)"
+    fi
+    exit 0
+    ;;
+  rofi | --rofi)
+    rofi_menu
+    exit 0
+    ;;
+  --rofi-script)
+    shift
+    rofi_script_mode "$@"
+    exit 0
+    ;;
+  esac
+
+  apply_theme "$1"
+}
+
+main "$@"
